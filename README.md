@@ -79,11 +79,25 @@ rspamd scans the mails on my machine very fast and efficient but the detection r
 
 ### Hints
 
-* To see how many mails rspamd has already learned or detected as SPAM or HAM, just run: `spamc stat`
+* To see how many mails rspamd has already learned or detected as SPAM or HAM, just run: `rspamc -h 127.0.0.1:11334 stat`
 
 * To see how many mails spamassassin has already learned run: `sa-learn --dump magic`
 
 * There is a logfile to see the IMAP idle and scanning process: /var/log/antispambox.log
+
+## Rule updates and learning reliability
+
+The container uses its local Redis server over IPv4, avoiding IPv6 loopback failures on hosts without IPv6. A guarded compatibility patch prevents the legacy IRSD client from treating failed rspamc commands as already learned. An unfamiliar IRSD implementation fails the build instead of being patched silently.
+
+A single root-owned system cron job checks rules daily at **00:05 in the container timezone**. It also runs during startup. The separate Debian daily updater is disabled to avoid competing jobs and write-permission conflicts. The Apache channel uses GPG signature verification; existing third-party channels retain their existing unsigned-update policy and are checked independently.
+
+New rules must pass SpamAssassin validation before the daemon reloads. Failed activation is retried on subsequent runs even when no newer rules are downloaded. An unavailable third-party channel produces a partial result without hiding working channels.
+
+Aggregate update status is stored at `/var/spamassassin/bayesdb/rule-update-status.json` in the existing persistent volume. Bounded diagnostic logs are at `/var/log/antispambox-rule-update.log`. A manual check is `docker exec antispambox python3 /root/update_rules.py`; nonzero exit status means an error or partial channel failure.
+
+Training remains separate from rule updates. Both classifiers need sufficient known-good and spam examples; putting messages in the detected-junk folder does not train them unless that folder is also configured for training. Existing training caches are preserved. Back up classifiers and caches before investigating or replaying previously skipped training; do not blindly clear them.
+
+Run portable tests with `python3 -m unittest discover -s tests -v`. Native cron, IRSD and rule-validation checks require the built image and are skipped outside it; the Dockerfile runs the full suite without accessing any mailbox. No replay tool or deployment data is included.
 
 ## TODOs
 

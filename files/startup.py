@@ -3,6 +3,11 @@ from shutil import copyfile
 import subprocess
 import json
 import sys
+import learning_compat
+import update_rules
+
+learning_compat.apply()
+update_rules.install_schedule()
 
 
 def cleanup_file(filename):
@@ -70,21 +75,8 @@ def fix_permissions():
 
 
 def download_spamassassin_rules():
-    """download the spamassassin rules"""
-    p = subprocess.Popen(['/usr/bin/sa-update', '--no-gpg', '-v', '--channelfile', '/root/sa-channels'],
-                         stdout=subprocess.PIPE)
-    (output, err) = p.communicate()
-    if p.returncode != 0 and p.returncode != 1:
-        print("ERROR: sa-update failed")
-        print(err)
-        print(output)
-
-    p = subprocess.Popen(['/usr/bin/sa-update', '--no-gpg', '-v'], stdout=subprocess.PIPE)
-    (output, err) = p.communicate()
-    if p.returncode != 0 and p.returncode != 1:
-        print("ERROR: sa-update failed")
-        print(err)
-        print(output)
+    """Use the same validated updater at startup and from cron."""
+    update_rules.run(reload_required=False)
 
 
 def start_imap_idle():

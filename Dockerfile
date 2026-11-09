@@ -25,6 +25,7 @@ RUN apt-get update && \
       python3-sphinx \
       lighttpd \
       logrotate \
+      gpg \
       unattended-upgrades && \
 
 
@@ -56,14 +57,14 @@ RUN apt-get update && \
     chown -R debian-spamd:mail /var/spamassassin ; \
 #
 # configure cron configuration
-    crontab /root/cron_configuration && rm /root/cron_configuration ; \
+    install -m 0644 /root/cron_configuration /etc/cron.d/antispambox-rules && rm /root/cron_configuration ; \
 #
 # copy logrotate configuration
     mv mailreport_logrotate /etc/logrotate.d/mailreport_logrotate ; \
 #
 # configure spamassassin
     sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/spamassassin ; \
-    sed -i 's/CRON=0/CRON=1/' /etc/default/spamassassin ; \
+    sed -i 's/CRON=1/CRON=0/' /etc/default/spamassassin ; \
     sed -i 's/^OPTIONS=".*"/OPTIONS="--allow-tell --max-children 5 --helper-home-dir -u debian-spamd -x --virtual-config-dir=\/var\/spamassassin -s mail"/' /etc/default/spamassassin ; \
     echo "bayes_path /var/spamassassin/bayesdb/bayes" >> /etc/spamassassin/local.cf ; \
     cp /root/spamassassin_user_prefs /etc/spamassassin/user_prefs.cf ;\
@@ -110,6 +111,11 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+
+COPY tests /root/tests
+RUN python3 /root/learning_compat.py && \
+    python3 /root/update_rules.py --install-schedule && \
+    python3 -m unittest discover -s /root/tests -v
 
 # volumes
 VOLUME /var/spamassassin/bayesdb

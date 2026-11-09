@@ -96,7 +96,7 @@ describe MAILBOX_CONTENT_X_Flag Mailbox.org content filter positive match
 tflags MAILBOX_CONTENT_X_Flag autolearn_force
 score MAILBOX_CONTENT_X_Flag 10
 
-header __DOMAIN_DE  From =~ (/\.de>/i)
+header __DOMAIN_DE  From =~ /\.de>/i
 header __RELAYCOUNTRY_NOT_DE X-Relay-Countries =~ /\b(?!DE|US|XX)[A-Z]{2}\b/
 meta RELAY_AND_DOMAIN __DOMAIN_DE && __RELAYCOUNTRY_NOT_DE
 describe RELAY_AND_DOMAIN senders domain is .de, but first relay is not in GERMANY or US.
@@ -151,7 +151,7 @@ tflags BAYES_80 autolearn_force
 tflags BAYES_95 autolearn_force
 
 bayes_auto_learn_threshold_spam 8.0
-bayes_auto_learn_threshold_nospam 0.1
+bayes_auto_learn_threshold_nonspam 0.1
 
 ######################################
 #test not functional in our scenario #
