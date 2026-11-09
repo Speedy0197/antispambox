@@ -21,6 +21,38 @@ def startup():
     return module
 
 
+class StartupBudget(unittest.TestCase):
+    def test_slow_hardware_has_a_configurable_readiness_budget(self):
+        module = startup()
+        with patch.dict(module.os.environ, {}, clear=True):
+            self.assertEqual(module.readiness_timeout(), 180)
+        with patch.dict(module.os.environ, {'ANTISPAMBOX_STARTUP_TIMEOUT': '300'}):
+            self.assertEqual(module.readiness_timeout(), 300)
+
+    def test_slow_failed_probes_consume_the_readiness_deadline(self):
+        module = startup()
+        clock = [0.0]
+        def check():
+            clock[0] += 2
+            return {'filter': False}
+        def wait(seconds):
+            clock[0] += seconds
+            return False
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(module.healthcheck, 'check', side_effect=check) as probes, \
+                patch.object(module.STOP, 'wait', side_effect=wait):
+            with self.assertRaisesRegex(RuntimeError, 'did not become ready'):
+                module.wait_for_daemons([], 5)
+        self.assertEqual(probes.call_count, 2)
+        self.assertEqual(clock[0], 5)
+
+    def test_invalid_readiness_budget_fails(self):
+        module = startup()
+        for value in ('0', '-1', '901', 'invalid'):
+            with self.subTest(value=value), patch.dict(module.os.environ, {'ANTISPAMBOX_STARTUP_TIMEOUT': value}):
+                with self.assertRaises(ValueError):
+                    module.readiness_timeout()
+
 class AccountConfiguration(unittest.TestCase):
     def enabled(self, config):
         module = startup()

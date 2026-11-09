@@ -45,7 +45,7 @@ COPY tests/ /root/tests/
 RUN python3 -m unittest discover -s /root/tests -v
 
 VOLUME ["/var/spamassassin/bayesdb", "/root/accounts"]
-HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=180s --retries=3 \
     CMD ["python3", "/root/healthcheck.py"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/bin/tini", "--"]

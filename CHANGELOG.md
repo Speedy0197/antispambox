@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Allow slow first-start classifier initialization with a configurable readiness timeout.
+
 - Modernize to Python 3.12 / Debian 13 with signed distro packages and pinned mailbox clients.
 - Replace obsolete init wrappers with supervised foreground daemons and graceful shutdown.
 - Support current spamd defaults and validated foreground reloads; add local health checks.

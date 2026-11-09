@@ -98,10 +98,34 @@ def stop_process(child, group=False):
         child.wait(timeout=5)
 
 
+def readiness_timeout():
+    seconds = int(os.environ.get('ANTISPAMBOX_STARTUP_TIMEOUT', '180'))
+    if not 1 <= seconds <= 900:
+        raise ValueError('ANTISPAMBOX_STARTUP_TIMEOUT must be between 1 and 900 seconds')
+    return seconds
+
+def wait_for_daemons(daemons, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for name, child in daemons:
+            if child.poll() is not None:
+                raise RuntimeError('Daemon ' + name + ' exited during startup')
+        ready = all(healthcheck.check().values())
+        remaining = deadline - time.monotonic()
+        if ready and remaining >= 0:
+            return True
+        if remaining <= 0:
+            break
+        if STOP.wait(min(1, remaining)):
+            return False
+    raise RuntimeError('Filter daemons did not become ready')
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: STOP.set())
+    timeout = readiness_timeout()
     learning_compat.apply()
     update_rules.install_schedule()
     prepare_data()
@@ -134,16 +158,8 @@ def main():
         update_rules.SPAMD_PID.chmod(0o600)
         daemons.append(('lighttpd', start_daemon(['/usr/sbin/lighttpd', '-D', '-f', '/etc/lighttpd/lighttpd.conf'])))
         daemons.append(('cron', start_daemon(['/usr/sbin/cron', '-f'])))
-        for attempt in range(30):
-            for name, child in daemons:
-                if child.poll() is not None:
-                    raise RuntimeError('Daemon ' + name + ' exited during startup')
-            if all(healthcheck.check().values()):
-                break
-            if STOP.wait(1):
-                return 0
-        else:
-            raise RuntimeError('Filter daemons did not become ready')
+        if not wait_for_daemons(daemons, timeout):
+            return 0
         jobs.append(subprocess.Popen([sys.executable, '/root/update_rules.py'], start_new_session=True))
         if account_enabled():
             scanner = subprocess.Popen([sys.executable, '/root/antispambox.py'], start_new_session=True)
@@ -175,6 +191,6 @@ if __name__ == '__main__':
     else:
         try:
             raise SystemExit(main())
-        except (RuntimeError, OSError) as error:
+        except (RuntimeError, OSError, ValueError) as error:
             LOGGER.error('%s', error)
             raise SystemExit(1)
