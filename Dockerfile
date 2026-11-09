@@ -25,7 +25,7 @@ RUN apt-get update && \
       python3-sphinx \
       lighttpd \
       logrotate \
-      gpg \
+      gnupg \
       unattended-upgrades && \
 
 
@@ -39,7 +39,7 @@ RUN apt-get update && \
     wget https://codeberg.org/antispambox/IRSD/archive/master.zip && \
     unzip master.zip && \
     cd irsd && \
-    python3 setup.py install && \
+    pip3 install . && \
     cd .. ; \
     rm -Rf /root/irsd ; \
     rm /root/master.zip ; \
