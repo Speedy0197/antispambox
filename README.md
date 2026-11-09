@@ -65,7 +65,7 @@ rspamd scans the mails on my machine very fast and efficient but the detection r
 
 * To configure the container run:
   * `docker exec -i -t antispambox /bin/bash`
-  * use nano to configure the /root/accounts/imap_accounts.json
+  * configure /root/accounts/imap_accounts.json with your preferred editor or docker cp
 * startup.py will be directly started with the docker container. To enable the scanning for spam, you need to set in /accounts/imap_accounts.json the enabled flag to True. By deafult this flag will be set to False until the configuration is finished. 
 * First configure you mail account in /root/accounts/imap_accounts.json
 * Train spamassassinn and spamd:
@@ -74,7 +74,7 @@ rspamd scans the mails on my machine very fast and efficient but the detection r
     To train the backends copy your SPAM and HAM messages in the IMAP folders you configured for SPAM_train and HAM_traing.
 * Set the enabled flag in /root/accounts/imap_accounts.json to True.
 * Restart the docker container
-* The docker container will not start with IMAP idle to your INBOX folder and check for new mails. If a SPAM mail is detected, Antispambox will move the SPAM to your JUNK folder.
+* The docker container will now start with IMAP idle to your INBOX folder and check for new mails. If a SPAM mail is detected, Antispambox will move the SPAM to your JUNK folder.
 * Mails you move manually to SPAM_train will be learned as SPAM. Mails you move manually to HAM_train will learned as HAM.  The backend services spamassassin and rspamd will learn improve their detection rate with each learned mail.
 
 ### Hints
@@ -84,6 +84,23 @@ rspamd scans the mails on my machine very fast and efficient but the detection r
 * To see how many mails spamassassin has already learned run: `sa-learn --dump magic`
 
 * There is a logfile to see the IMAP idle and scanning process: /var/log/antispambox.log
+
+## Maintained image build
+
+The image uses Python 3.12 on Debian 13 (trixie), with SpamAssassin 4, Redis and Rspamd from Debian's signed repositories. Python mailbox clients are pinned; guarded compatibility patches support Python 3.12 and retry failed learning. No retired GeoLite download, unsigned Rspamd repository or CPAN build is required. The packaged legacy GeoIP database is a historical snapshot, not a current geolocation feed.
+
+Build and verify locally:
+
+```sh
+docker build -t antispambox .
+python3 tests/smoke_image.py antispambox
+```
+
+The build runs regression tests. The smoke test creates and removes its own offline container and anonymous volumes, uses synthetic training data, and checks health, learning, rule reload, clean shutdown and Redis persistence. CI publishes the image only after these checks pass.
+
+Daemons run in the foreground under a Python supervisor and tini. A daemon failure exits the container for the restart policy to handle. Allow up to 60 seconds for shutdown (`docker stop --time 60 antispambox`, or Compose `stop_grace_period: 60s`) so workers stop before Redis saves. The health check probes local Redis, spamd and Rspamd; it does not verify mailbox credentials, spam accuracy or external rule-feed availability. Classifier sockets bind to loopback inside the container.
+
+`files/imap_accounts.example.json` is the disabled account template. Real `imap_accounts.json` files and account directories are excluded from the build context. Keep credentials only in the runtime account volume at `/root/accounts/imap_accounts.json`; edit it with your preferred local editor or `docker cp`. Mailbox scanning starts only after a complete account is enabled. Existing account and classifier volume paths are preserved. Back them up before upgrading: newer daemon versions and changed numeric service ownership can affect rollback. Classifier storage is shared through the mail group without world-write permissions.
 
 ## Rule updates and learning reliability
 

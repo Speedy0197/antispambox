@@ -6,6 +6,7 @@ import subprocess
 import json
 import sys
 import logging
+import time
 from logging.handlers import TimedRotatingFileHandler
 
 # configure logging
@@ -50,23 +51,24 @@ except IndexError:
 
 
 def scan_spam():
-    logger.info("Scanning for SPAM with rspamd")
-    p = subprocess.Popen(['/usr/local/bin/irsd --imaphost ' +
-                          HOST + ' --imapuser ' + USERNAME + ' --imappasswd ' + PASSWORD +
-                          ' --spaminbox ' + JUNK + ' --imapinbox ' + INPUT +
-                          ' --learnhambox ' + HAMTRAIN + ' --learnspambox ' + SPAMTRAIN2 +
-                          ' --cachepath ' + CACHEPATH +
-                          ' --delete --expunge --partialrun 500'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    # '--mailreport', '/var/www/html/mailreport.txt',
-    logger.info(p.communicate())
-
-    logger.info("Scanning for SPAM with spamassassin")
-    p = subprocess.Popen(['/usr/local/bin/isbg --spamc --imaphost ' +
-                          HOST + ' --imapuser ' + USERNAME + ' --imappasswd ' + PASSWORD +
-                          ' --spaminbox ' + JUNK + ' --imapinbox ' + INPUT +
-                          ' --learnhambox ' + HAMTRAIN + ' --learnspambox ' + SPAMTRAIN +
-                          ' --delete --expunge --partialrun 500'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    logger.info(p.communicate())
+    for engine, training in (('irsd', SPAMTRAIN2), ('isbg', SPAMTRAIN)):
+        command = ['/usr/local/bin/' + engine]
+        if engine == 'isbg':
+            command.append('--spamc')
+        command += ['--imaphost', HOST, '--imapuser', USERNAME,
+                    '--imappasswd', PASSWORD, '--spaminbox', JUNK,
+                    '--imapinbox', INPUT, '--learnhambox', HAMTRAIN,
+                    '--learnspambox', training]
+        if engine == 'irsd':
+            command += ['--cachepath', CACHEPATH]
+        command += ['--delete', '--expunge', '--partialrun', '500']
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process.communicate()
+        # Do not log command arguments or client output containing mailbox data.
+        if process.returncode:
+            logger.warning('%s scan failed (exit=%s)', engine, process.returncode)
+        else:
+            logger.info('%s scan completed', engine)
 
 
 def login():
@@ -75,13 +77,14 @@ def login():
         try:
             server = IMAPClient(HOST)
             server.login(USERNAME, PASSWORD)
-            server.select_folder('INBOX')
+            server.select_folder(INPUT)
             # Start IDLE mode
             server.idle()
             logger.info("Connection is now in IDLE mode")
         except Exception as e:
             logger.info("Failed to connect - try again")
-            logger.info(e.message)
+            logger.warning("IMAP connection failed (%s); retrying", type(e).__name__)
+            time.sleep(10)
             continue
         return server
 

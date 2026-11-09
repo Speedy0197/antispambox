@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+/files/imap_accounts.json
+.env
+private/
+accounts/

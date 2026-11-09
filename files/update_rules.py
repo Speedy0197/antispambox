@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -15,17 +16,38 @@ CRON = ('# Antispambox rule updates, daily 00:05 in the container timezone.\n'
 STATUS = pathlib.Path('/var/spamassassin/bayesdb/rule-update-status.json')
 LOG = pathlib.Path('/var/log/antispambox-rule-update.log')
 LOCK = pathlib.Path('/run/lock/antispambox-rule-update.lock')
+SPAMD_PID = pathlib.Path('/run/antispambox/spamd.pid')
+
+
+def disable_daily_updates(path):
+    if not path.is_file():
+        return False
+    original = path.read_text()
+    text, count = re.subn(r'(?m)^CRON=[01]$', 'CRON=0', original)
+    if count > 1:
+        raise RuntimeError('Multiple Debian updater toggles found')
+    if not count:
+        text = original.rstrip('\n') + '\nCRON=0\n'
+    if text != original:
+        path.write_text(text)
+    return True
+
+
+def spamd_service_name():
+    for name in ('spamd', 'spamassassin'):
+        if pathlib.Path('/etc/init.d', name).is_file():
+            return name
+    raise RuntimeError('The SpamAssassin daemon package is not installed')
 
 
 def install_schedule():
+    found = [disable_daily_updates(pathlib.Path('/etc/default', name))
+             for name in ('spamd', 'spamassassin')]
+    if not any(found):
+        raise RuntimeError('No supported SpamAssassin daemon defaults found')
     cron = pathlib.Path('/etc/cron.d/antispambox-rules')
     cron.write_text(CRON)
     cron.chmod(0o644)
-    defaults = pathlib.Path('/etc/default/spamassassin')
-    text, count = re.subn(r'(?m)^CRON=[01]$', 'CRON=0', defaults.read_text())
-    if count != 1:
-        raise RuntimeError('Unexpected Debian daily-updater configuration')
-    defaults.write_text(text)
 
 
 def execute(command):
@@ -43,6 +65,26 @@ def execute(command):
 def channels():
     return [line.strip() for line in pathlib.Path(__file__).with_name('sa-channels').read_text().splitlines()
             if line.strip() and not line.lstrip().startswith('#')]
+
+
+def reload_foreground_spamd():
+    try:
+        descriptor = os.open(SPAMD_PID, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor) as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+                return 1
+            pid = int(handle.read(32).strip())
+        if pid <= 1:
+            return 1
+        arguments = pathlib.Path('/proc', str(pid), 'cmdline').read_bytes().split(b'\0')
+        if not any(pathlib.Path(arg.decode(errors='replace')).name == 'spamd'
+                   or arg.startswith(b'spamd ') for arg in arguments):
+            return 1
+        os.kill(pid, signal.SIGHUP)
+        return 0
+    except (OSError, ValueError):
+        return 1
 
 
 def update(reload_required=True, activation_pending=False):
@@ -63,10 +105,13 @@ def update(reload_required=True, activation_pending=False):
         if lint != 0:
             report['state'] = 'error'
         elif reload_required:
-            running = execute(['/usr/sbin/service', 'spamassassin', 'status'])
-            reload_code = execute(['/usr/sbin/service', 'spamassassin', 'reload']) if running == 0 else running
+            if os.path.lexists(SPAMD_PID):
+                reload_code = reload_foreground_spamd()
+            else:
+                running = execute(['/usr/sbin/service', spamd_service_name(), 'status'])
+                reload_code = execute(['/usr/sbin/service', spamd_service_name(), 'reload']) if running == 0 else running
             report['reload_exit'] = reload_code
-            report['reloaded'] = running == 0 and reload_code == 0
+            report['reloaded'] = reload_code == 0
             report['activation_pending'] = not report['reloaded']
             if not report['reloaded']:
                 report['state'] = 'error'

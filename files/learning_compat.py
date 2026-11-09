@@ -17,15 +17,31 @@ def patch_source(source):
     return result
 
 
-def installed_module():
+def installed_file(package, filename):
     candidates = set()
     for entry in sys.path:
         root = pathlib.Path(entry or '.')
-        for pattern in ('irsd/spamproc.py', 'irsd*/irsd/spamproc.py'):
+        for pattern in (f'{package}/{filename}', f'{package}*/{package}/{filename}'):
             candidates.update(path.resolve() for path in root.glob(pattern))
     if len(candidates) != 1:
-        raise RuntimeError('Expected exactly one installed, unpacked IRSD module')
+        raise RuntimeError('Expected exactly one installed, unpacked ' + package + ' module')
     return candidates.pop()
+
+
+def installed_module():
+    return installed_file('irsd', 'spamproc.py')
+
+
+def patch_typing(source):
+    old = 'Email = TypeVar(email.message.Message)'
+    new = 'Email = TypeVar("Email", bound=email.message.Message)'
+    if new in source and old not in source:
+        return source
+    if source.count(old) != 1:
+        raise RuntimeError('Unexpected client typing declaration; refusing an unreviewed patch')
+    result = source.replace(old, new)
+    ast.parse(result)
+    return result
 
 
 def apply():
@@ -34,6 +50,12 @@ def apply():
     patched = patch_source(source)
     if patched != source:
         path.write_text(patched)
+    for package in ("irsd", "isbg"):
+        path = installed_file(package, "imaputils.py")
+        source = path.read_text()
+        patched = patch_typing(source)
+        if patched != source:
+            path.write_text(patched)
 
 
 if __name__ == '__main__':

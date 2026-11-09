@@ -44,5 +44,22 @@ class TrainingResults(unittest.TestCase):
         self.assertEqual(self.result(2), (-9999, 2))
 
 
+
+class ClientEntrypoints(unittest.TestCase):
+    def check(self, name):
+        import shutil
+        import subprocess
+        executable = shutil.which(name)
+        if not executable:
+            self.skipTest('Client entrypoint requires the built image')
+        result = subprocess.run([executable, '--help'], capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, 'Installed client cannot start on this Python version')
+
+    def test_isbg_entrypoint_imports(self):
+        self.check('isbg')
+
+    def test_irsd_entrypoint_imports(self):
+        self.check('irsd')
+
 if __name__ == '__main__':
     unittest.main()

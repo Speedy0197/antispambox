@@ -1,127 +1,52 @@
-FROM python:3.10-slim
+FROM python:3.12-slim-trixie AS runtime
 
-# shell to start from Kitematic
-ENV DEBIAN_FRONTEND=noninteractive
-ENV SHELL=/bin/bash
-
+ARG DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    TZ=Europe/Berlin
+SHELL ["/bin/sh", "-ec"]
 WORKDIR /root
 
-COPY files/* /root/
-COPY files/rspamd_config/* /root/rspamd_config/
+# Signed Debian repositories provide both filter engines and the modern spamd service.
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod 755 /usr/sbin/policy-rc.d \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates cron gnupg lighttpd logrotate redis-server rspamd rsyslog \
+        spamassassin spamc spamd tini tzdata unattended-upgrades \
+        geoip-database libgeo-ip-perl libgeography-countries-perl \
+    && usermod -a -G mail redis \
+    && rm /usr/sbin/policy-rc.d \
+    && rm -rf /var/lib/apt/lists/*
 
-# install software
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      cron \
-      nano \
-      # python3 \
-      python3-pip \
-      python3-setuptools \
-      rsyslog \
-      spamassassin \
-      spamc \
-      unzip \
-      wget \
-      python3-sphinx \
-      lighttpd \
-      logrotate \
-      gnupg \
-      unattended-upgrades && \
+COPY requirements.txt /root/requirements.txt
+RUN python3 -m pip install --no-cache-dir -r /root/requirements.txt
 
+# Explicit sources: account volumes, local credentials and Git metadata are never copied.
+COPY files/*.py /root/
+COPY files/sa-channels files/spamassassin_user_prefs files/mailreport_logrotate /root/
+COPY files/imap_accounts.example.json /root/imap_accounts.json
+COPY files/rspamd_config/ /etc/rspamd/local.d/
 
-# install dependencies for pushtest
-    pip3 install imapclient && \
-    pip3 install isbg && \
+RUN install -m 0644 /root/spamassassin_user_prefs /etc/spamassassin/user_prefs.cf \
+    && install -m 0644 /root/mailreport_logrotate /etc/logrotate.d/antispambox \
+    && printf '\nbayes_path /var/spamassassin/bayesdb/bayes\n' >> /etc/spamassassin/local.cf \
+    && printf 'loadplugin Mail::SpamAssassin::Plugin::RelayCountry\n' > /etc/spamassassin/antispambox.pre \
+    && sed -i 's|^dir .*|dir /var/spamassassin/bayesdb|' /etc/redis/redis.conf \
+    && python3 /root/startup.py --configure \
+    && python3 /root/learning_compat.py \
+    && python3 /root/update_rules.py --install-schedule \
+    && rspamadm configtest
 
+FROM runtime AS tested
+COPY tests/ /root/tests/
+RUN python3 -m unittest discover -s /root/tests -v
 
-# download and install irsd (as long as it is not pushed to pypi)
-	cd /root && \
-    wget https://codeberg.org/antispambox/IRSD/archive/master.zip && \
-    unzip master.zip && \
-    cd irsd && \
-    pip3 install . && \
-    cd .. ; \
-    rm -Rf /root/irsd ; \
-    rm /root/master.zip ; \
-
-
-############################
-# configure software
-############################
-
-# create folders
-    mkdir /root/accounts ; \
-    cd /root && \
-#
-# fix permissions
-    chown -R debian-spamd:mail /var/spamassassin ; \
-#
-# configure cron configuration
-    install -m 0644 /root/cron_configuration /etc/cron.d/antispambox-rules && rm /root/cron_configuration ; \
-#
-# copy logrotate configuration
-    mv mailreport_logrotate /etc/logrotate.d/mailreport_logrotate ; \
-#
-# configure spamassassin
-    sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/spamassassin ; \
-    sed -i 's/CRON=1/CRON=0/' /etc/default/spamassassin ; \
-    sed -i 's/^OPTIONS=".*"/OPTIONS="--allow-tell --max-children 5 --helper-home-dir -u debian-spamd -x --virtual-config-dir=\/var\/spamassassin -s mail"/' /etc/default/spamassassin ; \
-    echo "bayes_path /var/spamassassin/bayesdb/bayes" >> /etc/spamassassin/local.cf ; \
-    cp /root/spamassassin_user_prefs /etc/spamassassin/user_prefs.cf ;\
-#
-# configure OS base
-    echo "alias logger='/usr/bin/logger -e'" >> /etc/bash.bashrc ; \
-    echo "LANG=en_US.UTF-8" > /etc/default/locale ; \
-    unlink /etc/localtime ; \
-    ln -s /usr/share/zoneinfo/Europe/Berlin /etc/localtime ; \
-    unlink /etc/timezone ; \
-    ln -s /usr/share/zoneinfo/Europe/Berlin /etc/timezone ; \
-#
-# integrate geo database
-    apt-get install -y --no-install-recommends cpanminus make wget&&\
-	cpanm  YAML &&\
-	cpanm Geography::Countries &&\
-	cpanm Geo::IP IP::Country::Fast &&\
-	cd /tmp && \
-	wget -N http://geolite.maxmind.com/download/geoip/database/GeoLiteCountry/GeoIP.dat.gz &&\
-	gunzip GeoIP.dat.gz &&\
-	mkdir /usr/local/share/GeoIP/ &&\
-	mv GeoIP.dat /usr/local/share/GeoIP/ &&\
-	echo "loadplugin Mail::SpamAssassin::Plugin::RelayCountry" >> /etc/spamassassin/init.pre ; \
-#
-# install rspamd
-    CODENAME=`lsb_release -c -s` ;\
-    echo "deb [arch=amd64] http://rspamd.com/apt-stable/ $CODENAME main" > /etc/apt/sources.list.d/rspamd.list ;\
-    echo "deb-src [arch=amd64] http://rspamd.com/apt-stable/ $CODENAME main" >> /etc/apt/sources.list.d/rspamd.list ;\
-    apt-get update ;\
-    apt-get --no-install-recommends install -y --allow-unauthenticated rspamd redis-server ;\
-    # configure rspamd
-    #echo "backend = 'redis'" > /etc/rspamd/local.d/classifier-bayes.conf ;\
-    #echo "new_schema = true;" >> /etc/rspamd/local.d/classifier-bayes.conf ;\
-    #echo "expire = 8640000;" >> /etc/rspamd/local.d/classifier-bayes.conf ;\
-    #echo "write_servers = 'localhost';" > /etc/rspamd/local.d/redis.conf ;\
-    #echo "read_servers = 'localhost';" >> /etc/rspamd/local.d/redis.conf ;\
-    sed -i 's+/var/lib/redis+/var/spamassassin/bayesdb+' /etc/redis/redis.conf ;\
-    cp /root/rspamd_config/* /etc/rspamd/local.d/ ;\
-    rm -r /root/rspamd_config ;\
-#
-# remove tools we don't need anymore
-    apt-get remove -y wget python3-pip python3-setuptools unzip make cpanminus  && \
-    apt-get autoremove -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-
-COPY tests /root/tests
-RUN python3 /root/learning_compat.py && \
-    python3 /root/update_rules.py --install-schedule && \
-    python3 -m unittest discover -s /root/tests -v
-
-# volumes
-VOLUME /var/spamassassin/bayesdb
-VOLUME /root/accounts
-
-# EXPOSE 80/tcp
-# EXPOSE 11334/tcp
-
-CMD python3 /root/startup.py && tail -n 0 -F /var/log/*.log
+VOLUME ["/var/spamassassin/bayesdb", "/root/accounts"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
+    CMD ["python3", "/root/healthcheck.py"]
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python3", "/root/startup.py"]

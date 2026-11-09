@@ -18,6 +18,7 @@ class UpdateResults(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('update_rules', path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        module.spamd_service_name = lambda: "spamd"
         return module
 
     def test_no_new_rules_is_success_without_reload(self):
@@ -84,6 +85,24 @@ class UpdateResults(unittest.TestCase):
             self.assertEqual(victim.read_text(), original)
             self.assertNotIn('last_success', json.loads(status.read_text()))
 
+
+    def test_foreground_reload_accepts_perl_interpreter_arguments(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as root:
+            pid = pathlib.Path(root) / 'spamd.pid'
+            pid.write_text('123\n')
+            with patch.object(module, 'SPAMD_PID', pid), patch.object(module.pathlib.Path, 'read_bytes', return_value=b'/usr/bin/perl\0-T\0-w\0/usr/sbin/spamd\0'), patch.object(module.os, 'kill') as send:
+                self.assertEqual(module.reload_foreground_spamd(), 0)
+                send.assert_called_once_with(123, module.signal.SIGHUP)
+
+    def test_foreground_reload_rejects_unrelated_process(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as root:
+            pid = pathlib.Path(root) / 'spamd.pid'
+            pid.write_text('123\n')
+            with patch.object(module, 'SPAMD_PID', pid), patch.object(module.pathlib.Path, 'read_bytes', return_value=b'/usr/bin/python3\0other.py\0'), patch.object(module.os, 'kill') as send:
+                self.assertEqual(module.reload_foreground_spamd(), 1)
+                send.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()
